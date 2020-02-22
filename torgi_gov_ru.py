@@ -1,194 +1,112 @@
-# -*- coding: utf-8 -*
-import urllib2
 import xml.etree.ElementTree as ET
-from lxml import etree
 import sqlite3
 import time
 from dateutil import rrule
 import datetime
+import requests
+from tqdm import tqdm
+import pandas as pd
+import numpy as np
 
 
-# копирует список уведомлений в файл export.xml за период date1-date2
-
-
-def dllist(date1, date2):
-    url = "https://torgi.gov.ru/opendata/7710349494-torgi/data.xml?bidKind=2&publishDateFrom=%s&publishDateTo=%s," % (
-        date1, date2)
+def url_response(url, wait_time):
     while True:
         try:
-            s = urllib2.urlopen(url)
-        except urllib2.URLError:
-            print('Ошибка!')
-            time.sleep(20)
+            r = requests.get(url)
+        except:
+            print('Unable to connect to ' + url)
+            print(f'Waiting {wait_time} sec')
+            time.sleep(wait_time)
             pass
         else:
-            break
-    contents = s.read()
-    file = open("export.xml", 'w')
-    file.write(contents)
-    file.close()
+            return r
 
 
-# экспорт строки данных в бд
-def insertsql(row):
-    conn = sqlite3.connect('auct.db')
-    conn.text_factory = str
-    c = conn.cursor()
-    c.execute('INSERT INTO data VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', row)
-    conn.commit()
-
-
-# парсим загруженный файл и выводим основные параметры участка
-
-def mainloop():
-    tree = ET.parse('export2.xml')
-    root = tree.getroot()
-
-    # используется lxml для извлечения пространства имен'{http://torgi.gov.ru/opendata}'
-    tree2 = etree.parse('export2.xml')
-    xmlns = '{%s}' % tree2.xpath('namespace-uri(.)')
-    for lot in root.iterfind('./%snotification/' % xmlns):
-        checkid = 0
-        if lot.tag == '%slot' % xmlns:
-            limit = 0
-            lotinfo = []
-            # проверка по bidType - состоявшийся и завершенный с одним участником
-            '''
-            if (lot.find('./%sbidStatus/%sid' % (xmlns, xmlns)).text.encode('utf-8') == '5' 
-                or lot.find('./%sbidStatus/%sid' % (xmlns, xmlns)).text.encode('utf-8') == '6'):
-                print 'Состоялся!'
-            else:
-                checkid = checkid + 1
-            '''
-
-            # проверка на принадлежность категории участков !добавить растениеводство в mission
-            def checkcx(path):
-                if hasattr(path, 'text'):
-                    if 'ельскохоз' in path.text.encode('utf-8') or 'водство' in path.text.encode('utf-8'):
-                        return True
-                    else:
-                        return False
-                else:
-                    return False
-
-            # проверка на наличие текстовых атрибутов и добавляем их в список
-            def check(path2):
-                if hasattr(path2, 'text'):
-                    try:
-                        path2.text.encode('utf-8')
-                    except:
-                        lotinfo.append('н/д')
-                    else:
-                        lotinfo.append(path2.text.encode('utf-8'))
-                else:
-                    lotinfo.append('н/д')
-
-            # перечень данных на импорт
-            if (limit == 0 and checkid == 0 and (checkcx(lot.find('./%sgroundType/%sname' % (xmlns, xmlns)))
-                                                 or checkcx(
-                        lot.find('./%sgroundUsage/%sname' % (xmlns, xmlns))) or checkcx(
-                        lot.find('./%smission' % xmlns)))):
-                print('yes')
-                limit = limit + 1
-                # добавляем ссылку к лотам
-                lotinfo.append(url2)
-                # id лота
-                check(lot.find('%sid' % xmlns))
-                # дата сделки
-                check(root.find('./%snotification/%scommon/%spublished' % (xmlns, xmlns, xmlns)))
-                check(root.find('./%snotification/%scommon/%sbidAuctionDate' % (xmlns, xmlns, xmlns)))
-
-                check(lot.find('./%skladrLocation/%sid' % (xmlns, xmlns)))
-                check(lot.find('./%skladrLocation/%sname' % (xmlns, xmlns)))
-                check(lot.find('%slocation' % xmlns))
-
-                check(lot.find('%sarea' % xmlns))
-                check(lot.find('./%sunit/%sname' % (xmlns, xmlns)))
-
-                check(lot.find('%scadastralNum' % xmlns))
-
-                check(lot.find('./%sgroundType/%sname' % (xmlns, xmlns)))
-                check(lot.find('./%sgroundUsage/%sname' % (xmlns, xmlns)))
-                check(lot.find('./%smission' % xmlns))
-                # начальная цена
-                check(lot.find('./%sarticle/%sname' % (xmlns, xmlns)))
-                check(lot.find('%stermYear' % xmlns))
-                check(lot.find('%sstartPrice' % xmlns))
-                check(lot.find('%sarticleVal' % xmlns))
-
-                check(lot.find('./%sbidStatus/%sname' % (xmlns, xmlns)))
-                check(lot.find('./%sbidType/%sname' % (xmlns, xmlns)))
-                check(lot.find('./%spropKind/%sname' % (xmlns, xmlns)))
-                insertsql(lotinfo)
-            else:
-                print('no!')
-
-
-# открывает файл export.xml и открывает ссылку <odDetailedHref>
-# для каждого элемента <notification> в дочернем элементе <odDetailedHref> поочереди сохраняем в файл export2xml
-def dllots():
-    tree1 = ET.parse('export.xml')
-    root1 = tree1.getroot()
-
-    tree3 = etree.parse('export.xml')
-    xmlns2 = '{%s}' % tree3.xpath('namespace-uri(.)')
-    for child in root1:
-        xml_error = 0
-        if hasattr(child.find('%sodDetailedHref' % xmlns2), 'text'):
-            while True:
-                try:
-                    # сохраняем отдельно файл с подробностями лотов!!! поправить на нормальную ссылку
-                    if xml_error == 3:
-                        break
-                    url2 = child.find('%sodDetailedHref' % xmlns2).text
-                    global url2
-                    # попробуем защититься от ошибки
-                    while True:
-                        try:
-                            s2 = urllib2.urlopen(url2)
-                        except urllib2.URLError:
-                            print('Ошибка!')
-                            time.sleep(20)
-                            pass
-                        else:
-                            break
-                    contents2 = s2.read()
-                    file2 = open("export2.xml", 'w')
-                    file2.write(contents2)
-                    file2.close()
-                    temp_parse = ET.parse('export2.xml')
-                except:
-                    print('Ошибка содержания xml!')
-                    time.sleep(20)
-                    xml_error += 1
-                    pass
-                else:
-                    mainloop()
-                    break
-
-
-start = datetime.date(2017, 4, 1)
-start2 = datetime.date(2017, 5, 1)
-end = datetime.date(2019, 1, 1)
-end2 = datetime.date(2019, 2, 1)
-
-
-# добавляем ноль в формат месяца
-def month(m):
-    if m < 10:
-        return '0%s' % m
+def get_root(path):
+    try:
+        root = ET.fromstring(path)
+    except:
+        print('Ошибка при парсинге xml')
     else:
-        return m
+        return root
 
 
-# обрабатываем все за установленный период
-def gogo():
-    for dt, dt2 in zip(rrule.rrule(rrule.MONTHLY, dtstart=start, until=end),
-                       rrule.rrule(rrule.MONTHLY, dtstart=start2, until=end2)):
-        a = '%s%s01T0000' % (dt.timetuple()[0], month(dt.timetuple()[1]))
-        b = '%s%s01T0000' % (dt2.timetuple()[0], month(dt2.timetuple()[1]))
-        dllist(a, b)
-        dllots()
+def get_text(root):
+    try:
+        text = root.text
+    except:
+        return 'н/д'
+    else:
+        return text
 
 
-gogo()
+class Parser_torgi_gov:
+    def __init__(self, ns, scheme_path, usage_path, db_path):
+        self.db_path = db_path
+        self.ns = ns
+        self.data = pd.read_csv(scheme_path, sep=';', encoding='cp1251')
+        self.data = self.data.query('to_copy == 1')[['column_name', 'xpath']].reset_index(drop=True)
+        to_add = pd.DataFrame([['bidMember_count', np.nan], ['odDetailedHref', np.nan]], columns=self.data.columns)
+        self.data = pd.concat([self.data, to_add], ignore_index=True)
+        self.usage_list = pd.read_csv(usage_path, sep=';', encoding='cp1251').query('to_copy == 1')['groundUsage_name']
+
+    def create_db(self):
+        conn = sqlite3.connect(self.db_path)
+        pd.DataFrame(columns=self.data['column_name']).to_sql('lots', con=conn)
+        conn.commit()
+        conn.close()
+
+    def insert_to_db(self, df):
+        conn = sqlite3.connect(self.db_path)
+        df.set_index('column_name').T.to_sql('lots', conn, if_exists='append', index=False)
+        conn.commit()
+        conn.close()
+
+    def check_agri(self, root):
+        groundType = get_text(root.find(f'./{self.ns}groundType/{self.ns}name'))
+        groundUsage = get_text(root.find(f'./{self.ns}groundUsage/{self.ns}name'))
+        mission = get_text(root.find(f'./{self.ns}mission'))
+        if groundType not in ['Земли сельскохозяйственного назначения', 'Земли населенных пунктов', 'н/д']:
+            return False
+        elif groundUsage not in list(self.usage_list):
+            return False
+        elif (groundUsage == 'н/д') and (
+                'ельско' not in mission and 'астениевод' not in mission and 'выращ' not in mission):
+            return False
+        else:
+            return True
+
+    def get_info(self, content, url):
+        root = get_root(content)
+        lots = root.findall(f'./{self.ns}notification/{self.ns}lot')
+        if len(lots) == 0:
+            return None
+        for lot in lots:
+            if not self.check_agri(lot):
+                continue
+            df = self.data.copy()
+            lot_info = []
+            for path in self.data['xpath'].dropna():
+                if 'notification' in path:
+                    lot_info.append(get_text(root.find(path)))
+                else:
+                    lot_info.append(get_text(lot.find(path)))
+            # количество участников
+            lot_info.append(len(lot.findall(f'./{self.ns}results/{self.ns}bidMember')))
+            # ссылка на xml с извещением
+            lot_info.append(url)
+            df['values'] = pd.Series(lot_info)
+            self.insert_to_db(df[['column_name', 'values']])
+
+    def dllots(self, publishDateFrom, publishDateTo):
+        url = f'https://torgi.gov.ru/opendata/7710349494-torgi/\
+                                    data.xml?bidKind=2&publishDateFrom={publishDateFrom}&publishDateTo={publishDateTo}'
+        r = url_response(url, 10)
+        contents = r.text
+        root = get_root(contents)
+        for child in tqdm(root, desc='Month loop', leave=False):
+            if hasattr(child.find(f'{self.ns}odDetailedHref'), 'text'):
+                url = child.find(f'{self.ns}odDetailedHref').text
+                r = url_response(url, 10)
+                contents = r.text
+                self.get_info(contents, url)
