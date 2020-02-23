@@ -1,8 +1,6 @@
 import xml.etree.ElementTree as ET
 import sqlite3
 import time
-from dateutil import rrule
-import datetime
 import requests
 from tqdm import tqdm
 import pandas as pd
@@ -40,6 +38,20 @@ def get_text(root):
         return text
 
 
+def generate_dates(start_date, end_date, date_format, **step):
+    start_date, end_date = pd.to_datetime(start_date), pd.to_datetime(end_date)
+    DatesFrom = []
+    DatesTo = []
+    while start_date < end_date:
+        DatesFrom.append(start_date.strftime(date_format))
+        start_date += pd.DateOffset(**step)
+        if start_date > end_date:
+            DatesTo.append(end_date.strftime(date_format))
+        else:
+            DatesTo.append(start_date.strftime(date_format))
+    return DatesFrom, DatesTo
+
+
 class Parser_torgi_gov:
     def __init__(self, ns, scheme_path, usage_path, db_path):
         self.db_path = db_path
@@ -52,13 +64,13 @@ class Parser_torgi_gov:
 
     def create_db(self):
         conn = sqlite3.connect(self.db_path)
-        pd.DataFrame(columns=self.data['column_name']).to_sql('lots', con=conn)
+        pd.DataFrame(columns=self.data['column_name']).to_sql('lots', con=conn, if_exists='replace')
         conn.commit()
         conn.close()
 
     def insert_to_db(self, df):
         conn = sqlite3.connect(self.db_path)
-        df.set_index('column_name').T.to_sql('lots', conn, if_exists='append', index=False)
+        df.set_index('column_name').T.to_sql('lots', con=conn, if_exists='append', index=False)
         conn.commit()
         conn.close()
 
@@ -99,12 +111,12 @@ class Parser_torgi_gov:
             self.insert_to_db(df[['column_name', 'values']])
 
     def dllots(self, publishDateFrom, publishDateTo):
-        url = f'https://torgi.gov.ru/opendata/7710349494-torgi/\
-                                    data.xml?bidKind=2&publishDateFrom={publishDateFrom}&publishDateTo={publishDateTo}'
+        url = f'https://torgi.gov.ru/opendata/7710349494-torgi/data.xml?bidKind=2&'+\
+                                            f'publishDateFrom={publishDateFrom}T0000&publishDateTo={publishDateTo}T0000'
         r = url_response(url, 10)
         contents = r.text
         root = get_root(contents)
-        for child in tqdm(root, desc='Month loop', leave=False):
+        for child in tqdm(root, desc='Notification loop', leave=False):
             if hasattr(child.find(f'{self.ns}odDetailedHref'), 'text'):
                 url = child.find(f'{self.ns}odDetailedHref').text
                 r = url_response(url, 10)
