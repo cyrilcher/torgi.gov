@@ -5,38 +5,54 @@ import requests
 from tqdm import tqdm
 import pandas as pd
 import numpy as np
+from typing import Optional
 
 
-def url_response(url, wait_time):
-    while True:
+def url_response(url: str, wait_time: int, tries: int = 10):
+    """Функция пробует подключиться к 'url' адресу 'tries' раз, каждый раз ожидает 'wait_time' между попытками.
+    На выход выдает содержание ссылки или None в случае неудачи.
+    """
+    count = 0
+    while count < tries:
         try:
             r = requests.get(url)
         except:
             # tqdm.write('Unable to connect to ' + url)
             # tqdm.write(f'Waiting {wait_time} sec')
             time.sleep(wait_time)
+            count += 1
             pass
         else:
             return r
+    tqdm.write(f'Не удалось обработать {url}')
+    return None
 
-def get_root(url):
-    tries = 0
-    while tries < 10:
+
+def get_root(url: str, tries: int = 10) -> Optional[str]:
+    """Функция пробует выгрузить содержание xml файла по 'url' адресу 'tries' раз.
+    На выход выдает содержание файла или None в случае неудачи.
+    """
+    count = 0
+    while count < tries:
         try:
             r = url_response(url, 10)
             contents = r.text
             root = ET.fromstring(contents)
         except:
-            tqdm.write('Ошибка при парсинге xml')
-            tqdm.write(f'Попытка #{tries}')
-            tries += 1
+            # tqdm.write('Ошибка при парсинге xml')
+            # tqdm.write(f'Попытка #{tries}')
+            count += 1
             pass
         else:
             return root
     tqdm.write(f'Не удалось обработать {url}')
     return None
 
-def get_text(root):
+
+def get_text(root) -> str:
+    """Проверяет у выбранного xml.etree.ElementTree.Element наличие текста и возвращает его.
+    В случае отсутствия, возвращает None
+    """
     try:
         text = root.text
     except:
@@ -45,7 +61,10 @@ def get_text(root):
         return text
 
 
-def generate_dates(start_date, end_date, date_format, **step):
+def generate_dates(start_date: str, end_date: str, date_format: str, **step) -> Tuple[list, list]:
+    """Генерирует список дат начиная с 'start_date', заканчивая 'end_date' с шагом 'step',
+    шаг задается как параметр функции pd.DateOffset()
+    """
     start_date, end_date = pd.to_datetime(start_date), pd.to_datetime(end_date)
     DatesFrom = []
     DatesTo = []
@@ -59,8 +78,32 @@ def generate_dates(start_date, end_date, date_format, **step):
     return DatesFrom, DatesTo
 
 
-class Parser_torgi_gov:
-    def __init__(self, ns, scheme_path, usage_path, db_path):
+class ParserTorgiGov:
+    """Основная часть парсера.
+
+    Задается:
+    'ns': name space xml документа
+
+    'scheme_path':путь к таблице .csv с расшифровкой xml схемы, должна иметь столбцы:
+     'to_copy' - 1 если копировать данный элемент файла
+     'column_name' - название колонки в таблице базы данных для соотстветствующего элемента
+     'xpath' - xpath к данному элементу (если элемент - описание конкретного лота в объявлении аукциона, то путь
+     должен начинаться от данного лота, как головного элемента)
+
+    'usage_path': путь к .csv списку видов разрешенного использования земельных участков, должен иметь столбцы:
+     'to_copy' - 1 если копировать данный вид разрешенного использования
+     'column_name' - название вида разрешенного использования как в базе (берется с сайта torgi.gov.ru)
+
+    'db_path': путь к самой базе данных (база данных создается если отсутствует, SQlite)
+
+    Основные методы:
+    'create_db': инициирует базу данных (или подключается к существующей), создает в ней таблицу 'lots',
+    если таблица существует, заменяет ее на пустую с колонками, указанными в файле scheme_path
+
+    'dl_lots': основной метод, загружает всю информацию по земельным участкам в диапазоне publishDateFrom:publishDateTo,
+    даты в нужном формате (ГГГГММДД) генерируются функцией generate_dates()
+    """
+    def __init__(self, ns: str, scheme_path: str, usage_path: str, db_path: str):
         self.db_path = db_path
         self.ns = ns
         self.data = pd.read_csv(scheme_path, sep=';', encoding='cp1251')
@@ -77,12 +120,16 @@ class Parser_torgi_gov:
         conn.close()
 
     def insert_to_db(self, df):
+        """Функция вставляет в таблицу базы данных информацию по одному земельному участку"""
         conn = sqlite3.connect(self.db_path)
         df.set_index('column_name').T.to_sql('lots', con=conn, if_exists='append', index=False)
         conn.commit()
         conn.close()
 
     def check_agri(self, root):
+        """Функция проверяет используется ли данный земельный участок в сельскохозяйственном производстве,
+        необходимо переписывать если загружаются данные для иных целей
+        """
         groundType = get_text(root.find(f'./{self.ns}groundType/{self.ns}name'))
         groundUsage = get_text(root.find(f'./{self.ns}groundUsage/{self.ns}name'))
         mission = get_text(root.find(f'./{self.ns}mission'))
@@ -97,6 +144,10 @@ class Parser_torgi_gov:
             return True
 
     def get_info(self, root, url):
+        """Загружает выбранные сведения, если они есть (если нет заполняют пропуски 'н/д').
+        В дополнение к этому добавляет количество участников в аукционе и ссылку на xml с извещением.
+        Для других целей скорее всего нужно переписывать.
+        """
         lots = root.findall(f'./{self.ns}notification/{self.ns}lot')
         if len(lots) == 0:
             return None
@@ -117,19 +168,15 @@ class Parser_torgi_gov:
             df['values'] = pd.Series(lot_info)
             self.insert_to_db(df[['column_name', 'values']])
 
-    def dllots(self, publishDateFrom, publishDateTo):
-        url = f'https://torgi.gov.ru/opendata/7710349494-torgi/data.xml?bidKind=2&'+\
-                                            f'publishDateFrom={publishDateFrom}T0000&publishDateTo={publishDateTo}T0000'
+    def dl_lots(self, publishDateFrom, publishDateTo):
+        url = f'https://torgi.gov.ru/opendata/7710349494-torgi/data.xml?bidKind=2&' + \
+              f'publishDateFrom={publishDateFrom}T0000&publishDateTo={publishDateTo}T0000'
         root = get_root(url)
         if not root:
             return None
-
-        # Скпиает xml который не удалось обработать
-
         for child in tqdm(root, desc='Notification loop', leave=False):
             if hasattr(child.find(f'{self.ns}odDetailedHref'), 'text'):
                 url = child.find(f'{self.ns}odDetailedHref').text
-
                 root = get_root(url)
                 if not root:
                     continue
