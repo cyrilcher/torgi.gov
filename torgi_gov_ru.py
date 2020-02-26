@@ -12,22 +12,29 @@ def url_response(url, wait_time):
         try:
             r = requests.get(url)
         except:
-            print('Unable to connect to ' + url)
-            print(f'Waiting {wait_time} sec')
+            # tqdm.write('Unable to connect to ' + url)
+            # tqdm.write(f'Waiting {wait_time} sec')
             time.sleep(wait_time)
             pass
         else:
             return r
 
-
-def get_root(path):
-    try:
-        root = ET.fromstring(path)
-    except:
-        print('Ошибка при парсинге xml')
-    else:
-        return root
-
+def get_root(url):
+    tries = 0
+    while tries < 10:
+        try:
+            r = url_response(url, 10)
+            contents = r.text
+            root = ET.fromstring(contents)
+        except:
+            tqdm.write('Ошибка при парсинге xml')
+            tqdm.write(f'Попытка #{tries}')
+            tries += 1
+            pass
+        else:
+            return root
+    tqdm.write(f'Не удалось обработать {url}')
+    return None
 
 def get_text(root):
     try:
@@ -62,6 +69,7 @@ class Parser_torgi_gov:
         self.data = pd.concat([self.data, to_add], ignore_index=True)
         self.usage_list = pd.read_csv(usage_path, sep=';', encoding='cp1251').query('to_copy == 1')['groundUsage_name']
 
+    # Ниже две функции, очевидно, можно объединить
     def create_db(self):
         conn = sqlite3.connect(self.db_path)
         pd.DataFrame(columns=self.data['column_name']).to_sql('lots', con=conn, if_exists='replace')
@@ -88,8 +96,7 @@ class Parser_torgi_gov:
         else:
             return True
 
-    def get_info(self, content, url):
-        root = get_root(content)
+    def get_info(self, root, url):
         lots = root.findall(f'./{self.ns}notification/{self.ns}lot')
         if len(lots) == 0:
             return None
@@ -113,12 +120,17 @@ class Parser_torgi_gov:
     def dllots(self, publishDateFrom, publishDateTo):
         url = f'https://torgi.gov.ru/opendata/7710349494-torgi/data.xml?bidKind=2&'+\
                                             f'publishDateFrom={publishDateFrom}T0000&publishDateTo={publishDateTo}T0000'
-        r = url_response(url, 10)
-        contents = r.text
-        root = get_root(contents)
+        root = get_root(url)
+        if not root:
+            return None
+
+        # Скпиает xml который не удалось обработать
+
         for child in tqdm(root, desc='Notification loop', leave=False):
             if hasattr(child.find(f'{self.ns}odDetailedHref'), 'text'):
                 url = child.find(f'{self.ns}odDetailedHref').text
-                r = url_response(url, 10)
-                contents = r.text
-                self.get_info(contents, url)
+
+                root = get_root(url)
+                if not root:
+                    continue
+                self.get_info(root, url)
